@@ -65,6 +65,17 @@ DotNet
       inputs:
         command: 'publish'
         publishWebProjects: true
+     -------------------------------------
+for lint:
+    - script: |
+        dotnet tool install -g dotnet-format
+        export PATH="$PATH:~/.dotnet/tools"
+      displayName: 'Install dotnet-format tool'
+ 
+    - script: |
+        dotnet format --verify-no-changes
+      displayName: 'Run dotnet format (lint check)'
+      continueOnError: true  # Optional: continue pipeline even if lint fails
  
  ------------------------------------------------
 Java:
