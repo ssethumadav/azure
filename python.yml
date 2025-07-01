@@ -1,0 +1,182 @@
+trigger:
+  branches:
+    include:
+      - main
+
+pool:
+  name: ss-vm-agent-pool
+
+variables:
+  - group: capstone-variables
+  - name: imageName
+    value: sethumadavacr.azurecr.io/capstone:$(Build.BuildId)
+  - name: azureServiceConnection
+    value: 'terraform-service-connection'
+  - name: acrServiceConnection
+    value: 'acr-service-connection'
+  - name: sonarConnection
+    value: 'sonar-capstone'
+  - name: terraformDirectory
+    value: '.'
+
+# =======================
+# 1. SonarCloud Analysis
+# =======================
+stages:
+- stage: SonarCloud
+  displayName: 'SonarCloud Code Analysis'
+  jobs:
+    - job: Sonar
+      steps:
+        - task: UsePythonVersion@0
+          inputs:
+            versionSpec: '3.x'
+
+        - script: |
+            python -m pip install --upgrade pip
+            pip install -r requirements.txt
+            pip install pytest pytest-cov
+            pytest --cov=Market --cov-report=xml
+          displayName: 'Install dependencies & Run Tests with Coverage'
+
+        - task: SonarCloudPrepare@1
+          inputs:
+            SonarCloud: $(sonarConnection)
+            organization: 'devuser130746'
+            scannerMode: 'CLI'
+            configMode: 'manual'
+            cliProjectKey: 'capstone'
+            cliProjectName: 'capstone'
+            cliSources: '.'
+            extraProperties: |
+              sonar.python.coverage.reportPaths=coverage.xml
+
+        - script: |
+            sudo apt-get update
+            sudo apt-get install -y unzip wget
+            wget https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-5.0.1.3006-linux.zip
+            unzip sonar-scanner-cli-5.0.1.3006-linux.zip
+            export PATH=$(pwd)/sonar-scanner-5.0.1.3006-linux/bin:$PATH
+            sonar-scanner \
+              -Dsonar.projectKey=capstone \
+              -Dsonar.organization=devuser130746 \
+              -Dsonar.sources=. \
+              -Dsonar.host.url=https://sonarcloud.io \
+              -Dsonar.login=$(SONAR_TOKEN)
+          displayName: 'Install and Run SonarCloud Scanner'
+
+        - task: SonarCloudPublish@1
+          inputs:
+            pollingTimeoutSec: '300'
+
+# ============================
+# 2. Docker Build & Push Stage
+# ============================
+- stage: BuildAndPush
+  displayName: 'Build, Scan, and Push Docker Image'
+  dependsOn: SonarCloud
+  jobs:
+    - job: Build
+      steps:
+
+        - task: Docker@2
+          displayName: 'Login to ACR'
+          inputs:
+            command: login
+            containerRegistry: $(acrServiceConnection)
+
+        - task: Docker@2
+          displayName: 'Build Docker Image'
+          inputs:
+            containerRegistry: 'acr-service-connection'
+            repository: 'capstone'
+            command: 'build'
+            Dockerfile: '**/Dockerfile'
+            tags: |
+              $(Build.BuildId)
+#install trivy
+        - script: |
+            sudo apt-get update
+            sudo apt-get install -y wget dpkg
+            LATEST_TRIVY_VERSION=$(curl -s https://api.github.com/repos/aquasecurity/trivy/releases/latest | grep "tag_name" | cut -d '"' -f 4)
+            curl -LO https://github.com/aquasecurity/trivy/releases/download/${LATEST_TRIVY_VERSION}/trivy_${LATEST_TRIVY_VERSION#v}_Linux-64bit.deb
+            sudo dpkg -i trivy_${LATEST_TRIVY_VERSION#v}_Linux-64bit.deb
+          displayName: 'Install Latest Trivy CLI'
+
+        # Scan Docker image with Trivy
+        - script: |
+            trivy image --exit-code 0 --severity HIGH,CRITICAL sethumadavacr.azurecr.io/capstone:$(Build.BuildId)
+          displayName: 'Trivy Vulnerability Scan (High/Critical)'
+
+        # Push only if scan passed
+        - task: Docker@2
+          displayName: 'Push Docker Image to ACR'
+          condition: succeeded()
+          inputs:
+            containerRegistry: 'acr-service-connection'
+            repository: 'capstone'
+            command: 'push'
+            tags: |
+              $(Build.BuildId)
+
+
+# =========================================
+# 3. Deploy to Two AKS Clusters 
+# =========================================
+- stage: DeployToAKS
+  displayName: 'Deploy to Both AKS Clusters'
+  dependsOn: BuildAndPush
+  jobs:
+
+    # ---------- Cluster 1 ----------
+    - job: DeployToCluster1
+      displayName: 'Deploy to AKS Cluster 1 (VNET1)'
+      steps:
+        - task: AzureCLI@2
+          displayName: 'Get AKS Credentials - Cluster 1'
+          inputs:
+            azureSubscription: $(azureServiceConnection)
+            scriptType: bash
+            scriptLocation: inlineScript
+            inlineScript: |
+              az aks get-credentials --resource-group sethu-rg --name sethu-aks-cluster-vnet1 --overwrite-existing
+
+        - script: |
+            echo "Injecting image name into deployment.yml"
+            imageName="sethumadavacr.azurecr.io/capstone:$(Build.BuildId)"
+            sed -i "s|__IMAGE_NAME__|$imageName|g" manifests/deployment.yml
+            echo "Updated deployment.yml:"
+            cat manifests/deployment.yml
+          displayName: 'Inject Docker Image Name - Cluster 1'
+
+        - script: |
+            echo "Deploying to AKS Cluster 1"
+            kubectl apply -f manifests/
+          displayName: 'kubectl apply - Cluster 1'
+
+    # ---------- Cluster 2 ----------
+    - job: DeployToCluster2
+      displayName: 'Deploy to AKS Cluster 2 (VNET2)'
+      dependsOn: DeployToCluster1
+      steps:
+        - task: AzureCLI@2
+          displayName: 'Get AKS Credentials - Cluster 2'
+          inputs:
+            azureSubscription: $(azureServiceConnection)
+            scriptType: bash
+            scriptLocation: inlineScript
+            inlineScript: |
+              az aks get-credentials --resource-group sethu-rg --name sethu-aks-cluster-vnet2 --overwrite-existing
+
+        - script: |
+            echo "Injecting image name into deployment.yml"
+            imageName="sethumadavacr.azurecr.io/capstone:$(Build.BuildId)"
+            sed -i "s|__IMAGE_NAME__|$imageName|g" manifests/deployment.yml
+            echo "Updated deployment.yml:"
+            cat manifests/deployment.yml
+          displayName: 'Inject Docker Image Name - Cluster 2'
+
+        - script: |
+            echo "Deploying to AKS Cluster 2"
+            kubectl apply -f manifests/
+          displayName: 'kubectl apply - Cluster 2'
