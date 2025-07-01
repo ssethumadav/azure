@@ -1,0 +1,66 @@
+NodeJS
+ 
+    - task: Bash@3
+      inputs:
+        targetType: 'inline'
+        script: |
+          npm install --produciton
+          npm test -- --passWithNoTests
+
+Python
+ 
+        sudo apt-get update
+        sudo apt-get install -y python3-pip python3-venv
+ 
+        python3 -m venv venv
+        source venv/bin/activate
+ 
+        pip install --upgrade pip
+        pip install flake8
+        pip install -r requirements.txt
+ 
+        flake8 .
+        python3 -m unittest discover .
+
+ 
+DotNet
+ 
+ 
+    - task: UseDotNet@2
+      displayName: 'Install .NET SDK 8.0'
+      inputs:
+        packageType: 'sdk'
+        version: '8.0.x'
+        installationPath: $(Agent.ToolsDirectory)/dotnet
+ 
+    - task: DotNetCoreCLI@2
+      inputs:
+        command: 'restore'
+        projects: '**/*.sln'
+    - task: DotNetCoreCLI@2
+      inputs:
+        command: 'build'
+        projects: '**/*.sln'
+    - task: DotNetCoreCLI@2
+      inputs:
+        command: 'test'
+        projects: 'tests/UnitTests/**.csproj'
+    - task: DotNetCoreCLI@2
+      inputs:
+        command: 'publish'
+        publishWebProjects: true
+ 
+ 
+Java:
+ 
+ 
+clean packageType- task: CopyFiles@2
+  inputs:
+    SourceFolder: '$(System.DefaultWorkingDirectory)/target'
+    Contents: '*.war'
+    TargetFolder: '$(Build.ArtifactStagingDirectory)'
+- task: PublishBuildArtifacts@1
+  inputs:
+    PathtoPublish: '$(Build.ArtifactStagingDirectory)'
+    ArtifactName: 'drop'
+    publishLocation: 'Container'
