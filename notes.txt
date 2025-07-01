@@ -1,9 +1,18 @@
-az provider register -n Microsoft.AzureTerraform
 az deployment group create --resource-group "rg123" --template-file main.bicep
+----------------------------------------------------
+az provider register -n Microsoft.AzureTerraform
  
 check using:
 az provider show -n Microsoft.AzureTerraform
 registeredState should be either Registering or Registered
+--------------------------------------------------------
+backend "azurerm" {
+    resource_group_name  = "pratheekSTORAGE-rg"
+    storage_account_name = "pratheekstorage0008"
+    container_name       = "tfstate"
+    key                  = "terraform.tfstate"
+  }
+-------------------------------------------
 
 NodeJS
  
@@ -13,7 +22,7 @@ NodeJS
         script: |
           npm install --produciton
           npm test -- --passWithNoTests
-
+--------------------------------------------------
 Python
  
         sudo apt-get update
@@ -29,7 +38,7 @@ Python
         flake8 .
         python3 -m unittest discover .
 
- 
+ --------------------------------------------------------------
 DotNet
  
  
@@ -57,7 +66,7 @@ DotNet
         command: 'publish'
         publishWebProjects: true
  
- 
+ ------------------------------------------------
 Java:
  
  
