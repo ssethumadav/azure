@@ -1,4 +1,5 @@
 az provider register -n Microsoft.AzureTerraform
+az deployment group create --resource-group "rg123" --template-file main.bicep
  
 check using:
 az provider show -n Microsoft.AzureTerraform
